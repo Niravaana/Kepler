@@ -1,2 +1,2 @@
 # Kepler
-Dx12 based renderer
+This is my play ground to do and learn dx12.
