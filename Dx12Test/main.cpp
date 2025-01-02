@@ -292,6 +292,7 @@ struct DeviceResources
     UINT frameIndex = 0;
     IDXGISwapChain3* swapChain3 = nullptr;
     ID3D12Resource* backBuffer[2] = { nullptr, nullptr };
+	ID3D12Resource* DXROutput;
 };
 
 /*
@@ -331,6 +332,7 @@ struct AppResources
 	ID3D12Resource* matParamsCB = nullptr;
 	MaterialParams matParams;	
 	UINT8* matParamsMappedPtr = nullptr;
+	ID3D12DescriptorHeap* descriptorHeap = nullptr;
 };
 
 /*
@@ -912,6 +914,129 @@ static void CreateTlas(DeviceResources& dr, AppResources& ar, Application& app, 
 	uavBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
 	dr.cmdList[dr.frameIndex]->ResourceBarrier(1, &uavBarrier);
 }
+
+static void CreateDXROutputTexture(DeviceResources& dr, AppResources& ar, RayTracingResources& rt)
+{
+	//Note texture format should match that of swapchain as later we will copy this texture to swapchain for presenting it hence, we init it as copy resource
+	D3D12_RESOURCE_DESC desc = {};
+	desc.DepthOrArraySize = 1;
+	desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+	desc.Width = gAppState.width;
+	desc.Height = gAppState.height;
+	desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	desc.MipLevels = 1;
+	desc.SampleDesc.Count = 1;
+	desc.SampleDesc.Quality = 0;
+
+	ThrowIfFailed(dr.device->CreateCommittedResource(&DefaultHeapProperties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr, IID_PPV_ARGS(&dr.DXROutput)), L"Failed to creat DXR output texture");
+#if NAME_D3D_RESOURCES
+	dr.DXROutput->SetName(L"DXR Output Buffer");
+#endif
+}
+
+// This heap holds desc for resources of ray tracing
+void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTracingResources& rt, Application& app)
+{
+	// Describe the CBV/SRV/UAV heap
+	// Need 7 entries:
+	// 1 CBV for the ViewParamsCB
+	// 1 CBV for the matParamsCB
+	// 1 UAV for the RT output
+	// 1 SRV for the Scene BVH
+	// 1 SRV for the index buffer
+	// 1 SRV for the vertex buffer
+	// 1 SRV for the texture
+
+	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+	heapDesc.NumDescriptors = 7;
+	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+	ThrowIfFailed(dr.device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&ar.descriptorHeap)), L"Failed to create RT descriptor heap");
+
+	D3D12_CPU_DESCRIPTOR_HANDLE handle = ar.descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	UINT handleIncrement = dr.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+#if NAME_D3D_RESOURCES
+	ar.descriptorHeap->SetName(L"DXR Descriptor Heap");
+#endif
+
+	// Create the ViewParams CBV
+	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.viewParams));
+	cbvDesc.BufferLocation = ar.viewParamsCB->GetGPUVirtualAddress();
+
+	dr.device->CreateConstantBufferView(&cbvDesc, handle);
+
+	// Create the MaterialParams CBV
+	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.matParams));
+	cbvDesc.BufferLocation = ar.matParamsCB->GetGPUVirtualAddress();
+
+	handle.ptr += handleIncrement;
+	dr.device->CreateConstantBufferView(&cbvDesc, handle);
+
+	// Create the DXR output buffer UAV
+	D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+	uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+	handle.ptr += handleIncrement;
+	dr.device->CreateUnorderedAccessView(dr.DXROutput, nullptr, &uavDesc, handle);
+
+	// Create the DXR Top Level Acceleration Structure SRV
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc;
+	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.RaytracingAccelerationStructure.Location = rt.TLAS.pResult->GetGPUVirtualAddress();
+
+	handle.ptr += handleIncrement;
+	dr.device->CreateShaderResourceView(nullptr, &srvDesc, handle);
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC indexSRVDesc;
+	indexSRVDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	indexSRVDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+	indexSRVDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+	indexSRVDesc.Buffer.StructureByteStride = 0;
+	indexSRVDesc.Buffer.FirstElement = 0;
+	indexSRVDesc.Buffer.NumElements = (static_cast<UINT>(app.mesh.indices.size()) * sizeof(UINT)) / sizeof(float);
+	indexSRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+	handle.ptr += handleIncrement;
+	dr.device->CreateShaderResourceView(ar.indexBuffer, &indexSRVDesc, handle);
+
+	// Create the vertex buffer SRV
+	D3D12_SHADER_RESOURCE_VIEW_DESC vertexSRVDesc;
+	vertexSRVDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	vertexSRVDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+	vertexSRVDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+	vertexSRVDesc.Buffer.StructureByteStride = 0;
+	vertexSRVDesc.Buffer.FirstElement = 0;
+	vertexSRVDesc.Buffer.NumElements = (static_cast<UINT>(app.mesh.vertices.size()) * sizeof(Vertex)) / sizeof(float);
+	vertexSRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+	handle.ptr += handleIncrement;
+	dr.device->CreateShaderResourceView(ar.vertexBuffer, &vertexSRVDesc, handle);
+
+	// Create the material texture SRV
+	D3D12_SHADER_RESOURCE_VIEW_DESC textureSRVDesc = {};
+	textureSRVDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	textureSRVDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	textureSRVDesc.Texture2D.MipLevels = 1;
+	textureSRVDesc.Texture2D.MostDetailedMip = 0;
+	textureSRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+	handle.ptr += handleIncrement;
+	dr.device->CreateShaderResourceView(ar.texture, &textureSRVDesc, handle);
+}
+
+//Create Descriptor Heaps 
+//Create Ray gen program
+//Create Miss program 
+//Create Closest hit program 
+//Create PSO 
+//Create shader table 
+//Create Command list 
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
