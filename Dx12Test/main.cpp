@@ -40,6 +40,8 @@ using namespace std;
 /*
  ------------------------------Common Types------------------------------------
 */
+constexpr UINT gFrameCount = 2;
+
 static const D3D12_HEAP_PROPERTIES UploadHeapProperties =
 {
 	D3D12_HEAP_TYPE_UPLOAD,
@@ -65,6 +67,18 @@ struct GlobalState
     BOOL vsync = false;
     
 }gAppState;
+
+struct ViewParams
+{
+	DirectX::XMMATRIX view = DirectX::XMMatrixIdentity();
+	DirectX::XMFLOAT4 viewOriginAndTanHalfFovY = DirectX::XMFLOAT4(0, 0.f, 0.f, 0.f);
+	DirectX::XMFLOAT2 resolution = DirectX::XMFLOAT2(1280, 720);
+};
+
+struct MaterialParams
+{
+	DirectX::XMFLOAT4 resolution;
+};
 
 struct TextureInfo
 {
@@ -171,6 +185,38 @@ struct Mesh
 	}
 };
 
+class HrException : public std::runtime_error
+{
+    inline std::string HrToString(HRESULT hr)
+    {
+        char s_str[64] = {};
+        sprintf_s(s_str, "HRESULT of 0x%08X", static_cast<UINT>(hr));
+        return std::string(s_str);
+    }
+public:
+    HrException(HRESULT hr) : std::runtime_error(HrToString(hr)), m_hr(hr) {}
+    HRESULT Error() const { return m_hr; }
+private:
+    const HRESULT m_hr;
+};
+
+inline void ThrowIfFailed(HRESULT hr)
+{
+    if (FAILED(hr))
+    {
+        throw HrException(hr);
+    }
+}
+
+inline void ThrowIfFailed(HRESULT hr, const wchar_t* msg)
+{
+    if (FAILED(hr))
+    {
+        OutputDebugString(msg);
+        throw HrException(hr);
+    }
+}
+
 /*
  ------------------------------Utility Functions------------------------------------
 */
@@ -249,6 +295,23 @@ struct DeviceResources
 };
 
 /*
+ ------------------------------Ray tracing Specific Resources------------------------------------
+*/
+struct AccelerationStructureBuffer
+{
+	ID3D12Resource* pScratch = nullptr;
+	ID3D12Resource* pResult = nullptr;
+	ID3D12Resource* pInstanceDesc = nullptr;	// only used in top-level AS
+};
+
+struct RayTracingResources
+{
+	AccelerationStructureBuffer						TLAS;
+	AccelerationStructureBuffer						BLAS;
+	uint64_t										tlasSize;
+};
+
+/*
  ------------------------------Application Specific Resources------------------------------------
 */
 
@@ -262,6 +325,12 @@ struct AppResources
 	D3D12_INDEX_BUFFER_VIEW indexBufferView;
     ID3D12Resource* texture = nullptr;
 	ID3D12Resource* textureUploadResource = nullptr;
+	ID3D12Resource* viewParamsCB = nullptr;
+	ViewParams viewParams;
+	UINT8* viewParamsMappedPtr = nullptr;
+	ID3D12Resource* matParamsCB = nullptr;
+	MaterialParams matParams;	
+	UINT8* matParamsMappedPtr = nullptr;
 };
 
 /*
@@ -656,6 +725,192 @@ static void CreateTexture(DeviceResources& dr, AppResources& ar, Application& ap
 
 	// Upload the texture to the GPU
 	UploadTexture(dr, ar.texture, ar.textureUploadResource, texture);
+}
+
+static void CreateConstBuffer(DeviceResources& dr, ID3D12Resource** buffer, UINT64 buffSize)
+{
+    const D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_UPLOAD;
+    const D3D12_RESOURCE_STATES resourceState = D3D12_RESOURCE_STATE_GENERIC_READ;
+    const D3D12_RESOURCE_FLAGS resourceFlags = D3D12_RESOURCE_FLAG_NONE;
+    UINT64 buffAlignment = 0;
+
+	CreateBuffer(dr, (buffSize + 255) & ~255, heapType, resourceState, resourceFlags, buffAlignment, buffer);
+}
+
+static void CreateViewParamsConstBuffer(DeviceResources& dr, AppResources& ar)
+{
+	CreateConstBuffer(dr, &ar.viewParamsCB, sizeof(ViewParams));
+#if NAME_D3D_RESOURCES
+	ar.viewParamsCB->SetName(L"View params constant buffer");
+#endif
+
+	ThrowIfFailed(ar.viewParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.viewParamsMappedPtr)), L"Failed to map view params buffer");
+	memcpy(ar.viewParamsMappedPtr, &ar.viewParams, sizeof(ar.viewParams));
+}
+
+static void CreateMaterialParamsConstBuffer(DeviceResources& dr, AppResources& ar, Application& app)
+{
+	CreateConstBuffer(dr, &ar.matParamsCB, sizeof(MaterialParams));
+#if NAME_D3D_RESOURCES
+	ar.matParamsCB->SetName(L"Material Constant Buffer");
+#endif
+
+	ar.matParams.resolution = XMFLOAT4(app.mesh.material.textureResolution, 0.f, 0.f, 0.f);
+
+	ThrowIfFailed(ar.matParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.matParamsMappedPtr)), L"Failed to map material const buffer");
+
+	memcpy(ar.matParamsMappedPtr, &ar.matParams, sizeof(ar.matParams));
+}
+
+
+/*
+ ------------------------------Ray Tracing Related Function Definitions------------------------------------
+*/
+static void CreateBlas(DeviceResources& dr, AppResources& ar, Application& app, RayTracingResources& rt)
+{
+	D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc;
+	geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+	geometryDesc.Triangles.VertexBuffer.StartAddress = ar.vertexBuffer->GetGPUVirtualAddress();
+	geometryDesc.Triangles.VertexBuffer.StrideInBytes = ar.vertexBufferView.StrideInBytes;
+	geometryDesc.Triangles.VertexCount = static_cast<UINT>(app.mesh.vertices.size());
+	geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+	geometryDesc.Triangles.IndexBuffer = ar.indexBuffer->GetGPUVirtualAddress();
+	geometryDesc.Triangles.IndexFormat = ar.indexBufferView.Format;
+	geometryDesc.Triangles.IndexCount = static_cast<UINT>(app.mesh.indices.size());
+	geometryDesc.Triangles.Transform3x4 = 0;
+	geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+	
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS buildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+
+	// Get the size requirements for the BLAS buffers
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS ASInputs = {};
+	ASInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+	ASInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;	
+	ASInputs.pGeometryDescs = &geometryDesc;
+	ASInputs.NumDescs = 1;
+	ASInputs.Flags = buildFlags;
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO ASPreBuildInfo = {};
+	dr.device->GetRaytracingAccelerationStructurePrebuildInfo(&ASInputs, &ASPreBuildInfo);
+
+	ASPreBuildInfo.ScratchDataSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ScratchDataSizeInBytes);
+	ASPreBuildInfo.ResultDataMaxSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ResultDataMaxSizeInBytes);
+
+	// Create the BLAS scratch buffer
+	UINT64 buffSize = ASPreBuildInfo.ScratchDataSizeInBytes;
+    D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_STATES resourceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_RESOURCE_FLAGS resourceFlags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    UINT64 buffAlignment = max(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
+
+	CreateBuffer(dr, buffSize, heapType, resourceState, resourceFlags, buffAlignment, &rt.BLAS.pScratch);
+#if NAME_D3D_RESOURCES
+	rt.BLAS.pScratch->SetName(L"DXR BLAS Scratch");
+#endif
+
+	// Create the BLAS buffer
+	buffSize = ASPreBuildInfo.ResultDataMaxSizeInBytes;
+	resourceState = D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
+	CreateBuffer(dr, buffSize, heapType, resourceState, resourceFlags, buffAlignment, &rt.BLAS.pResult);
+#if NAME_D3D_RESOURCES
+	rt.BLAS.pResult->SetName(L"DXR BLAS");
+#endif
+
+	// Describe and build the bottom level acceleration structure
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+	buildDesc.Inputs = ASInputs;	
+	buildDesc.ScratchAccelerationStructureData = rt.BLAS.pScratch->GetGPUVirtualAddress();
+	buildDesc.DestAccelerationStructureData = rt.BLAS.pResult->GetGPUVirtualAddress();
+
+	dr.cmdList[dr.frameIndex]->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+
+	// Wait for the BLAS build to complete
+	D3D12_RESOURCE_BARRIER uavBarrier;
+	uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+	uavBarrier.UAV.pResource = rt.BLAS.pResult;
+	uavBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	dr.cmdList[dr.frameIndex]->ResourceBarrier(1, &uavBarrier);
+}
+
+static void CreateTlas(DeviceResources& dr, AppResources& ar, Application& app, RayTracingResources& rt)
+{
+	D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {};
+	instanceDesc.InstanceID = 0;
+	instanceDesc.InstanceContributionToHitGroupIndex = 0;
+	instanceDesc.InstanceMask = 0xFF;
+	instanceDesc.Transform[0][0] = instanceDesc.Transform[1][1] = instanceDesc.Transform[2][2] = 1;
+	instanceDesc.AccelerationStructure = rt.BLAS.pResult->GetGPUVirtualAddress();
+	instanceDesc.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
+
+	UINT64 buffSize = sizeof(instanceDesc);
+    D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_STATES resourceState = D3D12_RESOURCE_STATE_GENERIC_READ;
+    D3D12_RESOURCE_FLAGS resourceFlags = D3D12_RESOURCE_FLAG_NONE;
+	UINT64 buffAlignment = 0;
+
+	CreateBuffer(dr, buffSize, heapType, resourceState, resourceFlags, buffAlignment, &rt.TLAS.pInstanceDesc);
+#if NAME_D3D_RESOURCES
+	rt.TLAS.pInstanceDesc->SetName(L"DXR TLAS Instance Descriptors");
+#endif
+
+	UINT8* pData;
+	rt.TLAS.pInstanceDesc->Map(0, nullptr, (void**)&pData);
+	memcpy(pData, &instanceDesc, sizeof(instanceDesc));
+	rt.TLAS.pInstanceDesc->Unmap(0, nullptr);
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS buildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+
+	// Get the size requirements for the TLAS buffers
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS ASInputs = {};
+	ASInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+	ASInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+	ASInputs.InstanceDescs = rt.TLAS.pInstanceDesc->GetGPUVirtualAddress();
+	ASInputs.NumDescs = 1;
+	ASInputs.Flags = buildFlags;
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO ASPreBuildInfo = {};
+	dr.device->GetRaytracingAccelerationStructurePrebuildInfo(&ASInputs, &ASPreBuildInfo);
+
+	ASPreBuildInfo.ResultDataMaxSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ResultDataMaxSizeInBytes);
+	ASPreBuildInfo.ScratchDataSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ScratchDataSizeInBytes);
+
+	// Set TLAS size
+	rt.tlasSize = ASPreBuildInfo.ResultDataMaxSizeInBytes;
+
+	// Create TLAS scratch buffer
+	buffSize = ASPreBuildInfo.ScratchDataSizeInBytes;
+    heapType = D3D12_HEAP_TYPE_DEFAULT;
+    resourceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    resourceFlags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+	buffAlignment = max(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);;
+
+	CreateBuffer(dr, buffSize, heapType, resourceState, resourceFlags, buffAlignment ,&rt.TLAS.pScratch);
+#if NAME_D3D_RESOURCES
+	rt.TLAS.pScratch->SetName(L"DXR TLAS Scratch");
+#endif
+
+	// Create the TLAS buffer
+	buffSize = ASPreBuildInfo.ResultDataMaxSizeInBytes;
+	resourceState = D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
+	CreateBuffer(dr, buffSize, heapType, resourceState, resourceFlags, buffAlignment, &rt.TLAS.pResult);
+#if NAME_D3D_RESOURCES
+	rt.TLAS.pResult->SetName(L"DXR TLAS");
+#endif
+
+	// Describe and build the TLAS
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+	buildDesc.Inputs = ASInputs;
+	buildDesc.ScratchAccelerationStructureData = rt.TLAS.pScratch->GetGPUVirtualAddress();
+	buildDesc.DestAccelerationStructureData = rt.TLAS.pResult->GetGPUVirtualAddress();
+
+	dr.cmdList[dr.frameIndex]->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+
+	// Wait for the TLAS build to complete
+	D3D12_RESOURCE_BARRIER uavBarrier;
+	uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+	uavBarrier.UAV.pResource = rt.TLAS.pResult;
+	uavBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	dr.cmdList[dr.frameIndex]->ResourceBarrier(1, &uavBarrier);
 }
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
