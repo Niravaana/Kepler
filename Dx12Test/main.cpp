@@ -1,6 +1,12 @@
 #ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN			// Exclude rarely-used items from Windows headers.
+#define WIN32_LEAN_AND_MEAN			
 #endif
+
+/*
+ 1. currently two command list created for each frame though we only use 0th commandlist
+ 2. Material if not mentioned loader currently throws exception
+ 3. Resource clean up is still remaining
+*/
 
 #include <Windows.h>
 #include <DirectXMath.h>
@@ -255,6 +261,8 @@ namespace Utility
 
 }
 
+
+
 struct Vertex
 {
 	DirectX::XMFLOAT3 position;
@@ -276,7 +284,34 @@ struct Vertex
 		uv = v.uv;
 		return *this;
 	}
+
 };
+
+namespace std
+{
+	void hash_combine(size_t &seed, size_t hash)
+	{
+		hash += 0x9e3779b9 + (seed << 6) + (seed >> 2);
+		seed ^= hash;
+	}
+
+	template<> struct hash<Vertex> 
+	{
+		size_t operator()(Vertex const &vertex) const 
+		{
+			size_t seed = 0;
+			hash<float> hasher;
+			hash_combine(seed, hasher(vertex.position.x));
+			hash_combine(seed, hasher(vertex.position.y));
+			hash_combine(seed, hasher(vertex.position.z));
+
+			hash_combine(seed, hasher(vertex.uv.x));
+			hash_combine(seed, hasher(vertex.uv.y));
+
+			return seed;
+		}
+	};
+}
 
 struct Mesh
 {
@@ -286,7 +321,6 @@ struct Mesh
 
 	static void LoadModel(string filepath, Mesh& model)
 	{
-        Material material;
 		tinyobj::attrib_t attrib;
 		std::vector<tinyobj::shape_t> shapes;
 		std::vector<tinyobj::material_t> materials;
@@ -294,15 +328,20 @@ struct Mesh
         std::string warn;
 
 		// Load the OBJ and MTL files
-		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filepath.c_str(), "materials\\"))
+		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filepath.c_str(), "Materials\\"))
+		{
+			throw std::runtime_error(err);
+		}
+
+		if (materials.empty())
 		{
 			throw std::runtime_error(err);
 		}
 
 		// Get the first material
 		// Only support a single material right now
-		material.name = materials[0].name;
-		material.texturePath = materials[0].diffuse_texname;
+		model.material.name = materials[0].name;
+		model.material.texturePath = materials[0].diffuse_texname;
 
 		// Parse the model and store the unique vertices
 		unordered_map<Vertex, uint32_t> uniqueVertices = {};
@@ -478,6 +517,10 @@ struct AppResources
 	MaterialParams matParams;	
 	UINT8* matParamsMappedPtr = nullptr;
 	ID3D12DescriptorHeap* descriptorHeap = nullptr;
+	float translationOffset = 0;
+	float rotationOffset = 0;
+	DirectX::XMFLOAT3 eyeAngle = { 0.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT3 eyePosition;
 };
 
 /*
@@ -512,8 +555,6 @@ struct Application
 	AppResources ar;
 	RayTracingResources rt;
 };
-
-
 
 static void WaitForGPU(DeviceResources& dr) 
 {
@@ -650,7 +691,7 @@ static void ResetCommandList(DeviceResources& dr)
 	// Reset the command allocator for the current frame
 	ThrowIfFailed(dr.cmdAllocator[dr.frameIndex]->Reset(), L"Failed to reset command allocator");
 	// Reset the command list for the current frame
-	ThrowIfFailed(dr.cmdList[dr.frameIndex]->Reset(dr.cmdAllocator[dr.frameIndex], nullptr), L"Failed to reset command list");
+	ThrowIfFailed(dr.cmdList[0]->Reset(dr.cmdAllocator[dr.frameIndex], nullptr), L"Failed to reset command list");
 }
 
 static void CreateFence(DeviceResources& dr) 
@@ -846,7 +887,7 @@ void UploadTexture(DeviceResources& dr, ID3D12Resource* destResource, ID3D12Reso
 	destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
 
 	// Copy the buffer resource from the upload heap to the texture resource on the default heap
-	dr.cmdList[dr.frameIndex]->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+	dr.cmdList[0]->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
 
 	// Transition the texture to a shader resource
 	D3D12_RESOURCE_BARRIER barrier = {};
@@ -856,7 +897,7 @@ void UploadTexture(DeviceResources& dr, ID3D12Resource* destResource, ID3D12Reso
 	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
-	dr.cmdList[dr.frameIndex]->ResourceBarrier(1, &barrier);
+	dr.cmdList[0]->ResourceBarrier(1, &barrier);
 }
 
 static void CreateTexture(DeviceResources& dr, AppResources& ar, Application& app)
@@ -994,14 +1035,14 @@ static void CreateBlas(DeviceResources& dr, AppResources& ar, Application& app, 
 	buildDesc.ScratchAccelerationStructureData = rt.BLAS.pScratch->GetGPUVirtualAddress();
 	buildDesc.DestAccelerationStructureData = rt.BLAS.pResult->GetGPUVirtualAddress();
 
-	dr.cmdList[dr.frameIndex]->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+	dr.cmdList[0]->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
 
 	// Wait for the BLAS build to complete
 	D3D12_RESOURCE_BARRIER uavBarrier;
 	uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
 	uavBarrier.UAV.pResource = rt.BLAS.pResult;
 	uavBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	dr.cmdList[dr.frameIndex]->ResourceBarrier(1, &uavBarrier);
+	dr.cmdList[0]->ResourceBarrier(1, &uavBarrier);
 }
 
 static void CreateTlas(DeviceResources& dr, AppResources& ar, Application& app, RayTracingResources& rt)
@@ -1075,14 +1116,14 @@ static void CreateTlas(DeviceResources& dr, AppResources& ar, Application& app, 
 	buildDesc.ScratchAccelerationStructureData = rt.TLAS.pScratch->GetGPUVirtualAddress();
 	buildDesc.DestAccelerationStructureData = rt.TLAS.pResult->GetGPUVirtualAddress();
 
-	dr.cmdList[dr.frameIndex]->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+	dr.cmdList[0]->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
 
 	// Wait for the TLAS build to complete
 	D3D12_RESOURCE_BARRIER uavBarrier;
 	uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
 	uavBarrier.UAV.pResource = rt.TLAS.pResult;
 	uavBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-	dr.cmdList[dr.frameIndex]->ResourceBarrier(1, &uavBarrier);
+	dr.cmdList[0]->ResourceBarrier(1, &uavBarrier);
 }
 
 static void CreateDXROutputTexture(DeviceResources& dr, AppResources& ar, RayTracingResources& rt)
@@ -1500,20 +1541,49 @@ static void CreateShaderTable(DeviceResources& dr, AppResources& ar, RayTracingR
 	rt.shaderTable->Unmap(0, nullptr);
 }
 
-static void UpdateViewParamsBuffer(DeviceResources& dr, AppResources& ar)
+static void UpdateViewParamsBuffer(AppResources& ar)
 {
+	const float rotationSpeed = 0.005f;
+	XMMATRIX view, invView;
+	XMFLOAT3 eye, focus, up;
+	float aspect, fov;
 
-}
+	ar.eyeAngle.x += rotationSpeed;
 
-static void BuildCommandList(DeviceResources& dr, AppResources& ar, RayTracingResources& rt)
-{
+#if _DEBUG
+	float x = 2.f * cosf(ar.eyeAngle.x);
+	float y = 0.f;
+	float z = 2.25f + 2.f * sinf(ar.eyeAngle.x);
 
+	focus = XMFLOAT3(0.f, 0.f, 0.f);
+#else
+	float x = 8.f * cosf(ar.eyeAngle.x);
+	float y = 1.5f + 1.5f * cosf(ar.eyeAngle.x);
+	float z = 8.f + 2.25f * sinf(ar.eyeAngle.x);
+	focus = XMFLOAT3(0.f, 1.75f, 0.f);
+#endif
+
+	eye = XMFLOAT3(x, y, z);
+	up = XMFLOAT3(0.f, 1.f, 0.f);
+
+	aspect = (float)gAppState.width / (float)gAppState.height;
+	fov = 65.f * (XM_PI / 180.f);							// convert to radians
+
+	ar.rotationOffset += rotationSpeed;
+
+	view = XMMatrixLookAtLH(XMLoadFloat3(&eye), XMLoadFloat3(&focus), XMLoadFloat3(&up));
+	invView = XMMatrixInverse(NULL, view);
+
+	ar.viewParams.view = XMMatrixTranspose(invView);
+	ar.viewParams.viewOriginAndTanHalfFovY = XMFLOAT4(eye.x, eye.y, eye.z, tanf(fov * 0.5f));
+	ar.viewParams.resolution = XMFLOAT2((float)gAppState.width, (float)gAppState.height);
+	memcpy(ar.viewParamsMappedPtr, &ar.viewParams, sizeof(ar.viewParams));
 }
 
 static void SubmitCommandList(DeviceResources& dr)
 {
-	dr.cmdList[dr.frameIndex]->Close();
-	ID3D12CommandList* pGraphicsList = { dr.cmdList[dr.frameIndex]};
+	dr.cmdList[0]->Close();
+	ID3D12CommandList* pGraphicsList = { dr.cmdList[0]};
 	dr.cmdQueue->ExecuteCommandLists(1, &pGraphicsList);
 	dr.fenceValues[dr.frameIndex]++;
 	dr.cmdQueue->Signal(dr.fence, dr.fenceValues[dr.frameIndex]);
@@ -1522,6 +1592,73 @@ static void SubmitCommandList(DeviceResources& dr)
 static void Present(DeviceResources& dr)
 {
 	ThrowIfFailed(dr.swapChain3->Present(gAppState.vsync, 0), L"Failed to present");
+}
+
+static void BuildCommandList(DeviceResources& dr, AppResources& ar, RayTracingResources& rt)
+{
+	D3D12_RESOURCE_BARRIER OutputBarriers[2] = {};
+	D3D12_RESOURCE_BARRIER CounterBarriers[2] = {};
+	D3D12_RESOURCE_BARRIER UAVBarriers[3] = {};
+
+	// Transition the back buffer to a copy destination
+	OutputBarriers[0].Transition.pResource = dr.backBuffer[dr.frameIndex];
+	OutputBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+	OutputBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+	OutputBarriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+	// Transition the DXR output buffer to a copy source
+	OutputBarriers[1].Transition.pResource = dr.DXROutput;
+	OutputBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+	OutputBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	OutputBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+	// Wait for the transitions to complete
+	dr.cmdList[0]->ResourceBarrier(2, OutputBarriers);
+
+	// Set the UAV/SRV/CBV and sampler heaps
+	ID3D12DescriptorHeap* ppHeaps[] = { ar.descriptorHeap };
+	dr.cmdList[0]->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+
+	// Dispatch rays
+	D3D12_DISPATCH_RAYS_DESC desc = {};
+	desc.RayGenerationShaderRecord.StartAddress = rt.shaderTable->GetGPUVirtualAddress();
+	desc.RayGenerationShaderRecord.SizeInBytes = rt.shaderTableRecordSize;
+
+	desc.MissShaderTable.StartAddress = rt.shaderTable->GetGPUVirtualAddress() + rt.shaderTableRecordSize;
+	desc.MissShaderTable.SizeInBytes = rt.shaderTableRecordSize;		// Only a single Miss program entry
+	desc.MissShaderTable.StrideInBytes = rt.shaderTableRecordSize;
+
+	desc.HitGroupTable.StartAddress = rt.shaderTable->GetGPUVirtualAddress() + (rt.shaderTableRecordSize * 2);
+	desc.HitGroupTable.SizeInBytes = rt.shaderTableRecordSize;			// Only a single Hit program entry
+	desc.HitGroupTable.StrideInBytes = rt.shaderTableRecordSize;
+
+	desc.Width = gAppState.width;
+	desc.Height = gAppState.height;
+	desc.Depth = 1;
+
+	dr.cmdList[0]->SetPipelineState1(rt.rtpso);
+	dr.cmdList[0]->DispatchRays(&desc);
+
+	// Transition DXR output to a copy source
+	OutputBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	OutputBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+	
+	// Wait for the transitions to complete
+	dr.cmdList[0]->ResourceBarrier(1, &OutputBarriers[1]);
+
+	// Copy the DXR output to the back buffer
+	dr.cmdList[0]->CopyResource(dr.backBuffer[dr.frameIndex], dr.DXROutput);
+
+	// Transition back buffer to present
+	OutputBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+	OutputBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+	
+	// Wait for the transitions to complete
+	dr.cmdList[0]->ResourceBarrier(1, &OutputBarriers[0]);
+
+	// Submit the command list and wait for the GPU to idle
+	SubmitCommandList(dr);
+	WaitForGPU(dr);
 }
 
 /*
@@ -1567,8 +1704,8 @@ void Application::Init(UINT width, UINT height, BOOL vsync, std::string meshFile
 	CreateShaderTable(dr, ar, rt);
 
 	//ToDo handle multiple command list submission
-	dr.cmdList[dr.frameIndex]->Close();
-	ID3D12CommandList* pCommandLists = { dr.cmdList[dr.frameIndex] };
+	dr.cmdList[0]->Close();
+	ID3D12CommandList* pCommandLists = { dr.cmdList[0] };
 	dr.cmdQueue->ExecuteCommandLists(1, &pCommandLists);
 
 	WaitForGPU(dr);
@@ -1585,7 +1722,7 @@ void Application::Render()
 
 void Application::Update()
 {
-	UpdateViewParamsBuffer(dr, ar);
+	UpdateViewParamsBuffer(ar);
 }
 
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
@@ -1666,5 +1803,6 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
         app.Render();
     }
 
+	DestroyResources(app.dr);
     return static_cast<char>(msg.wParam);
 }
