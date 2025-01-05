@@ -3,10 +3,20 @@
 #endif
 
 /*
+*   ToDos 
  1. currently two command list created for each frame though we only use 0th commandlist
  2. Material if not mentioned loader currently throws exception
  3. Resource clean up is still remaining
+ 4. change root/desc heap in order of most freq used to least freq used for perf reasons
 */
+
+/* Next Target
+1. Load cube model 
+2. Check out how they are passing vertex and index buffer 
+3. Make appropriate shader changes.
+4. Point light cube demo with RT should be working
+*/
+
 
 #include <Windows.h>
 #include <DirectXMath.h>
@@ -1261,6 +1271,14 @@ static void CreateRayGenProgram(DeviceResources& dr, RayTracingResources& rt, Ap
 	* Describing local root signature
 	* Global root signature is generally visible to all shaders vs/ps 
 	* Local root signature is very specific when we want to give info about resources accessible only to ray tracing shaders.
+	* Must match the way desc heap created
+	*    1 CBV for the ViewParamsCB
+		 1 CBV for the matParamsCB
+		 1 UAV for the RT output
+		 1 SRV for the Scene BVH
+		 1 SRV for the index buffer
+		 1 SRV for the vertex buffer
+		 1 SRV for the texture
 	*/
 
 	D3D12_DESCRIPTOR_RANGE ranges[3];
