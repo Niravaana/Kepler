@@ -18,6 +18,9 @@
 */
 
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN	
+#endif
 #include <Windows.h>
 #include <DirectXMath.h>
 #include <DirectXPackedVector.h>
@@ -38,7 +41,7 @@
 #include "stb_image.h"
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
-
+#include "StepTimer.h"
 #include "dxc/dxcapi.h"
 #include "dxc/dxcapi.use.h"
 
@@ -115,16 +118,18 @@ struct GlobalState
     
 }gAppState;
 
-struct ViewParams
+struct CubeConstantBuffer
 {
-	DirectX::XMMATRIX view = DirectX::XMMatrixIdentity();
-	DirectX::XMFLOAT4 viewOriginAndTanHalfFovY = DirectX::XMFLOAT4(0, 0.f, 0.f, 0.f);
-	DirectX::XMFLOAT2 resolution = DirectX::XMFLOAT2(1280, 720);
+    XMFLOAT4 albedo;
 };
 
-struct MaterialParams
+struct SceneConstantBuffer
 {
-	DirectX::XMFLOAT4 resolution;
+    XMMATRIX projectionToWorld;
+    XMVECTOR cameraPosition;
+    XMVECTOR lightPosition;
+    XMVECTOR lightAmbientColor;
+    XMVECTOR lightDiffuseColor;
 };
 
 struct TextureInfo
@@ -276,6 +281,7 @@ namespace Utility
 struct Vertex
 {
 	DirectX::XMFLOAT3 position;
+	DirectX::XMFLOAT3 normal;
 	DirectX::XMFLOAT2 uv;
 
 	bool operator==(const Vertex &v) const 
@@ -520,17 +526,23 @@ struct AppResources
 	D3D12_INDEX_BUFFER_VIEW indexBufferView;
     ID3D12Resource* texture = nullptr;
 	ID3D12Resource* textureUploadResource = nullptr;
-	ID3D12Resource* viewParamsCB = nullptr;
-	ViewParams viewParams;
-	UINT8* viewParamsMappedPtr = nullptr;
-	ID3D12Resource* matParamsCB = nullptr;
-	MaterialParams matParams;	
-	UINT8* matParamsMappedPtr = nullptr;
 	ID3D12DescriptorHeap* descriptorHeap = nullptr;
-	float translationOffset = 0;
-	float rotationOffset = 0;
-	DirectX::XMFLOAT3 eyeAngle = { 0.0f, 0.0f, 0.0f };
-	DirectX::XMFLOAT3 eyePosition;
+
+	//camera params
+	StepTimer timer;
+    float curRotationAngleRad;
+    XMVECTOR eye;
+    XMVECTOR at;
+    XMVECTOR up;
+
+	//scene light pos mat buffers
+	SceneConstantBuffer sceneParams[gFrameCount];
+	ID3D12Resource* sceneParamsCB = nullptr;
+	SceneConstantBuffer* sceneParamsMappedPtr = nullptr;
+
+    CubeConstantBuffer cubeParams;
+	ID3D12Resource* cubeParamsCB = nullptr;
+	CubeConstantBuffer* cubeParamsMappedPtr = nullptr;
 };
 
 /*
@@ -549,7 +561,8 @@ struct Application
     void Init(UINT width, UINT height, BOOL vsync, std::string meshFilePath);
     void Render();
     void Update();
-	
+	void InitializeSceneParams();
+	void UpdateCameraMatrices();
     void InitShaderCompiler()
 	{
 		ThrowIfFailed(shaderCompiler.DxcDllHelper.Initialize());
@@ -960,31 +973,28 @@ static void CreateConstBuffer(DeviceResources& dr, ID3D12Resource** buffer, UINT
 	CreateBuffer(dr, (buffSize + 255) & ~255, heapType, resourceState, resourceFlags, buffAlignment, buffer);
 }
 
-static void CreateViewParamsConstBuffer(DeviceResources& dr, AppResources& ar)
+static void CreateSceneParamsConstBuffer(DeviceResources& dr, AppResources& ar)
 {
-	CreateConstBuffer(dr, &ar.viewParamsCB, sizeof(ViewParams));
+	CreateConstBuffer(dr, &ar.sceneParamsCB, sizeof(SceneConstantBuffer));
 #if NAME_D3D_RESOURCES
-	ar.viewParamsCB->SetName(L"View params constant buffer");
+	ar.sceneParamsCB->SetName(L"Scene params constant buffer");
 #endif
 
-	ThrowIfFailed(ar.viewParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.viewParamsMappedPtr)), L"Failed to map view params buffer");
-	memcpy(ar.viewParamsMappedPtr, &ar.viewParams, sizeof(ar.viewParams));
+	ThrowIfFailed(ar.sceneParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.sceneParamsMappedPtr)), L"Failed to map scene params buffer");
+	memcpy(ar.sceneParamsMappedPtr, &ar.sceneParams, sizeof(ar.sceneParams));
 }
 
-static void CreateMaterialParamsConstBuffer(DeviceResources& dr, AppResources& ar, Application& app)
+static void CreateCubeParamsConstBuffer(DeviceResources& dr, AppResources& ar, Application& app)
 {
-	CreateConstBuffer(dr, &ar.matParamsCB, sizeof(MaterialParams));
+	CreateConstBuffer(dr, &ar.cubeParamsCB, sizeof(CubeConstantBuffer));
 #if NAME_D3D_RESOURCES
-	ar.matParamsCB->SetName(L"Material Constant Buffer");
+	ar.cubeParamsCB->SetName(L"Material Constant Buffer");
 #endif
 
-	ar.matParams.resolution = XMFLOAT4(app.mesh.material.textureResolution, 0.f, 0.f, 0.f);
+	ThrowIfFailed(ar.cubeParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.cubeParamsMappedPtr)), L"Failed to map cube const buffer");
 
-	ThrowIfFailed(ar.matParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.matParamsMappedPtr)), L"Failed to map material const buffer");
-
-	memcpy(ar.matParamsMappedPtr, &ar.matParams, sizeof(ar.matParams));
+	memcpy(ar.cubeParamsMappedPtr, &ar.cubeParams, sizeof(ar.cubeParams));
 }
-
 
 /*
  ------------------------------Ray Tracing Related Function Definitions------------------------------------
@@ -1194,16 +1204,16 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 	ar.descriptorHeap->SetName(L"DXR Descriptor Heap");
 #endif
 
-	// Create the ViewParams CBV
+	// Create the Scene parameters CBV
 	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.viewParams));
-	cbvDesc.BufferLocation = ar.viewParamsCB->GetGPUVirtualAddress();
+	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.sceneParams));
+	cbvDesc.BufferLocation = ar.sceneParamsCB->GetGPUVirtualAddress();
 
 	dr.device->CreateConstantBufferView(&cbvDesc, handle);
 
 	// Create the MaterialParams CBV
-	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.matParams));
-	cbvDesc.BufferLocation = ar.matParamsCB->GetGPUVirtualAddress();
+	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.cubeParams));
+	cbvDesc.BufferLocation = ar.cubeParamsCB->GetGPUVirtualAddress();
 
 	handle.ptr += handleIncrement;
 	dr.device->CreateConstantBufferView(&cbvDesc, handle);
@@ -1559,45 +1569,6 @@ static void CreateShaderTable(DeviceResources& dr, AppResources& ar, RayTracingR
 	rt.shaderTable->Unmap(0, nullptr);
 }
 
-static void UpdateViewParamsBuffer(AppResources& ar)
-{
-	const float rotationSpeed = 0.005f;
-	XMMATRIX view, invView;
-	XMFLOAT3 eye, focus, up;
-	float aspect, fov;
-
-	ar.eyeAngle.x += rotationSpeed;
-
-#if _DEBUG
-	float x = 2.f * cosf(ar.eyeAngle.x);
-	float y = 0.f;
-	float z = 2.25f + 2.f * sinf(ar.eyeAngle.x);
-
-	focus = XMFLOAT3(0.f, 0.f, 0.f);
-#else
-	float x = 8.f * cosf(ar.eyeAngle.x);
-	float y = 1.5f + 1.5f * cosf(ar.eyeAngle.x);
-	float z = 8.f + 2.25f * sinf(ar.eyeAngle.x);
-	focus = XMFLOAT3(0.f, 1.75f, 0.f);
-#endif
-
-	eye = XMFLOAT3(x, y, z);
-	up = XMFLOAT3(0.f, 1.f, 0.f);
-
-	aspect = (float)gAppState.width / (float)gAppState.height;
-	fov = 65.f * (XM_PI / 180.f);							// convert to radians
-
-	ar.rotationOffset += rotationSpeed;
-
-	view = XMMatrixLookAtLH(XMLoadFloat3(&eye), XMLoadFloat3(&focus), XMLoadFloat3(&up));
-	invView = XMMatrixInverse(NULL, view);
-
-	ar.viewParams.view = XMMatrixTranspose(invView);
-	ar.viewParams.viewOriginAndTanHalfFovY = XMFLOAT4(eye.x, eye.y, eye.z, tanf(fov * 0.5f));
-	ar.viewParams.resolution = XMFLOAT2((float)gAppState.width, (float)gAppState.height);
-	memcpy(ar.viewParamsMappedPtr, &ar.viewParams, sizeof(ar.viewParams));
-}
-
 static void SubmitCommandList(DeviceResources& dr)
 {
 	dr.cmdList[0]->Close();
@@ -1683,6 +1654,49 @@ static void BuildCommandList(DeviceResources& dr, AppResources& ar, RayTracingRe
  ------------------------------Function Definitions------------------------------------
 */
 
+void Application::InitializeSceneParams()
+{
+	auto frameIndex = dr.frameIndex;
+
+	//Materials
+	{
+		ar.cubeParams.albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+	}
+
+	// Setup camera.
+    {
+        ar.eye = { 0.0f, 2.0f, -5.0f, 1.0f };
+        ar.at = { 0.0f, 0.0f, 0.0f, 1.0f };
+        XMVECTOR right = { 1.0f, 0.0f, 0.0f, 0.0f };
+
+        XMVECTOR direction = XMVector4Normalize(ar.at - ar.eye);
+        ar.up = XMVector3Normalize(XMVector3Cross(direction, right));
+
+        // Rotate camera around Y axis.
+        XMMATRIX rotate = XMMatrixRotationY(XMConvertToRadians(45.0f));
+        ar.eye = XMVector3Transform(ar.eye, rotate);
+        ar.up = XMVector3Transform(ar.up, rotate);
+        
+        UpdateCameraMatrices();
+    }
+}
+
+void Application::UpdateCameraMatrices()
+{
+	auto frameIndex = dr.frameIndex;
+	ar.sceneParams[frameIndex].cameraPosition = ar.eye;
+	float fovAngleY = 45.0f;
+	//ToDo handle window resize
+	float aspectRatio = static_cast<float>(gAppState.width) / static_cast<float>(gAppState.height);
+	float nearPlane = 1.0f;
+	float farPlane = 125.0f;
+	XMMATRIX view = XMMatrixLookAtLH(ar.eye, ar.at, ar.up);
+	XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(fovAngleY), aspectRatio, nearPlane, farPlane);
+	XMMATRIX viewProj = view * proj;
+
+	ar.sceneParams[frameIndex].projectionToWorld = XMMatrixInverse(nullptr, viewProj);
+}
+
 void Application::Init(UINT width, UINT height, BOOL vsync, std::string meshFilePath)
 {
     gAppState.width = width;
@@ -1707,8 +1721,8 @@ void Application::Init(UINT width, UINT height, BOOL vsync, std::string meshFile
 	CreateVertexBuffer(dr, ar, *this);
 	CreateIndexBuffer(dr, ar, *this);
 	CreateTexture(dr, ar, *this);
-	CreateViewParamsConstBuffer(dr, ar);
-	CreateMaterialParamsConstBuffer(dr, ar, *this);
+	CreateSceneParamsConstBuffer(dr, ar);
+	CreateCubeParamsConstBuffer(dr, ar, *this);
 
 	//Create ray tracing specific resources 
 	CreateBlas(dr, ar, *this, rt);
@@ -1740,7 +1754,7 @@ void Application::Render()
 
 void Application::Update()
 {
-	UpdateViewParamsBuffer(ar);
+	
 }
 
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
