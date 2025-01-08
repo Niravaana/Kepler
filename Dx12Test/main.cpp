@@ -563,6 +563,7 @@ struct Application
     void Update();
 	void InitializeSceneParams();
 	void UpdateCameraMatrices();
+	void CalculateFrameStats();
     void InitShaderCompiler()
 	{
 		ThrowIfFailed(shaderCompiler.DxcDllHelper.Initialize());
@@ -1697,6 +1698,41 @@ void Application::UpdateCameraMatrices()
 	ar.sceneParams[frameIndex].projectionToWorld = XMMatrixInverse(nullptr, viewProj);
 }
 
+void Application::CalculateFrameStats()
+{
+	static int frameCnt = 0;
+    static double elapsedTime = 0.0f;
+    double totalTime = ar.timer.GetTotalSeconds();
+    frameCnt++;
+
+    // Compute averages over one second period.
+    if ((totalTime - elapsedTime) >= 1.0f)
+    {
+        float diff = static_cast<float>(totalTime - elapsedTime);
+        float fps = static_cast<float>(frameCnt) / diff; // Normalize to an exact second.
+
+        frameCnt = 0;
+        elapsedTime = totalTime;
+
+        float MRaysPerSecond = (gAppState.width * gAppState.height * fps) / static_cast<float>(1e6);
+
+        wstringstream windowText;
+		//ToDo add more proper create device and fill this info there
+		UINT adapterId = 0;
+		DXGI_ADAPTER_DESC1 adapterDesc;
+		ThrowIfFailed(dr.adapter->GetDesc1(&adapterDesc), L"Failed to get adapter desc");
+
+        windowText << setprecision(2) << fixed
+            << L"    fps: " << fps << L"     ~Million Primary Rays/s: " << MRaysPerSecond
+            << L"    GPU[" << adapterId << L"]: " << adapterDesc.Description;
+
+		{
+			std::wstring dispText = windowText.str();
+			SetWindowText(hwnd, dispText.c_str());
+		}
+    }
+}
+
 void Application::Init(UINT width, UINT height, BOOL vsync, std::string meshFilePath)
 {
     gAppState.width = width;
@@ -1754,7 +1790,31 @@ void Application::Render()
 
 void Application::Update()
 {
-	
+	ar.timer.Tick();
+    CalculateFrameStats();
+    float elapsedTime = static_cast<float>(ar.timer.GetElapsedSeconds());
+    auto frameIndex = dr.frameIndex;
+	auto prevFrameIndex = (dr.frameIndex == 0) ? (gFrameCount - 1) : (dr.frameIndex - 1);
+
+    // Rotate the camera around Y axis.
+    {
+        float secondsToRotateAround = 24.0f;
+        float angleToRotateBy = 360.0f * (elapsedTime / secondsToRotateAround);
+        XMMATRIX rotate = XMMatrixRotationY(XMConvertToRadians(angleToRotateBy));
+        ar.eye = XMVector3Transform(ar.eye, rotate);
+        ar.up = XMVector3Transform(ar.up, rotate);
+        ar.at = XMVector3Transform(ar.at, rotate);
+        UpdateCameraMatrices();
+    }
+
+    // Rotate the second light around Y axis.
+    {
+        float secondsToRotateAround = 8.0f;
+        float angleToRotateBy = -360.0f * (elapsedTime / secondsToRotateAround);
+        XMMATRIX rotate = XMMatrixRotationY(XMConvertToRadians(angleToRotateBy));
+        const XMVECTOR& prevLightPosition =  ar.sceneParams[prevFrameIndex].lightPosition;
+        ar.sceneParams[frameIndex].lightPosition = XMVector3Transform(prevLightPosition, rotate);
+    }
 }
 
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
