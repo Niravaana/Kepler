@@ -282,13 +282,13 @@ struct Vertex
 {
 	DirectX::XMFLOAT3 position;
 	DirectX::XMFLOAT3 normal;
-	DirectX::XMFLOAT2 uv;
+	//DirectX::XMFLOAT2 uv;
 
 	bool operator==(const Vertex &v) const 
 	{
 		if (Utility::CompareVector3WithEpsilon(position, v.position)) 
 		{
-			if (Utility::CompareVector2WithEpsilon(uv, v.uv)) return true;
+			//if (Utility::CompareVector2WithEpsilon(uv, v.uv)) return true;
 			return true;
 		}
 		return false;
@@ -297,7 +297,7 @@ struct Vertex
 	Vertex& operator=(const Vertex& v) 
 	{
 		position = v.position;
-		uv = v.uv;
+		//uv = v.uv;
 		return *this;
 	}
 
@@ -334,6 +334,61 @@ struct Mesh
 	std::vector<Vertex> vertices;
 	std::vector<UINT> indices;
     Material material;
+
+	void LoadCube()
+	{
+		indices = {
+					3,1,0,
+					2,1,3,
+
+					6,4,5,
+					7,4,6,
+
+					11,9,8,
+					10,9,11,
+
+					14,12,13,
+					15,12,14,
+
+					19,17,16,
+					18,17,19,
+
+					22,20,21,
+					23,20,22
+		};
+
+		vertices = {
+			{ XMFLOAT3(-1.0f, 1.0f, -1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) },
+			{ XMFLOAT3(1.0f, 1.0f, -1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) },
+			{ XMFLOAT3(1.0f, 1.0f, 1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) },
+			{ XMFLOAT3(-1.0f, 1.0f, 1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) },
+
+			{ XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT3(0.0f, -1.0f, 0.0f) },
+			{ XMFLOAT3(1.0f, -1.0f, -1.0f), XMFLOAT3(0.0f, -1.0f, 0.0f) },
+			{ XMFLOAT3(1.0f, -1.0f, 1.0f), XMFLOAT3(0.0f, -1.0f, 0.0f) },
+			{ XMFLOAT3(-1.0f, -1.0f, 1.0f), XMFLOAT3(0.0f, -1.0f, 0.0f) },
+
+			{ XMFLOAT3(-1.0f, -1.0f, 1.0f), XMFLOAT3(-1.0f, 0.0f, 0.0f) },
+			{ XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT3(-1.0f, 0.0f, 0.0f) },
+			{ XMFLOAT3(-1.0f, 1.0f, -1.0f), XMFLOAT3(-1.0f, 0.0f, 0.0f) },
+			{ XMFLOAT3(-1.0f, 1.0f, 1.0f), XMFLOAT3(-1.0f, 0.0f, 0.0f) },
+
+			{ XMFLOAT3(1.0f, -1.0f, 1.0f), XMFLOAT3(1.0f, 0.0f, 0.0f) },
+			{ XMFLOAT3(1.0f, -1.0f, -1.0f), XMFLOAT3(1.0f, 0.0f, 0.0f) },
+			{ XMFLOAT3(1.0f, 1.0f, -1.0f), XMFLOAT3(1.0f, 0.0f, 0.0f) },
+			{ XMFLOAT3(1.0f, 1.0f, 1.0f), XMFLOAT3(1.0f, 0.0f, 0.0f) },
+
+			{ XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT3(0.0f, 0.0f, -1.0f) },
+			{ XMFLOAT3(1.0f, -1.0f, -1.0f), XMFLOAT3(0.0f, 0.0f, -1.0f) },
+			{ XMFLOAT3(1.0f, 1.0f, -1.0f), XMFLOAT3(0.0f, 0.0f, -1.0f) },
+			{ XMFLOAT3(-1.0f, 1.0f, -1.0f), XMFLOAT3(0.0f, 0.0f, -1.0f) },
+
+			{ XMFLOAT3(-1.0f, -1.0f, 1.0f), XMFLOAT3(0.0f, 0.0f, 1.0f) },
+			{ XMFLOAT3(1.0f, -1.0f, 1.0f), XMFLOAT3(0.0f, 0.0f, 1.0f) },
+			{ XMFLOAT3(1.0f, 1.0f, 1.0f), XMFLOAT3(0.0f, 0.0f, 1.0f) },
+			{ XMFLOAT3(-1.0f, 1.0f, 1.0f), XMFLOAT3(0.0f, 0.0f, 1.0f) },
+		};
+	}
 
 	static void LoadModel(string filepath, Mesh& model)
 	{
@@ -1184,13 +1239,13 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 {
 	// Describe the CBV/SRV/UAV heap
 	// Need 7 entries:
-	// 1 CBV for the ViewParamsCB
-	// 1 CBV for the matParamsCB
+	// 1 CBV for the sceneParamsCB
+	// 1 CBV for the cubeParamsCB
 	// 1 UAV for the RT output
 	// 1 SRV for the Scene BVH
 	// 1 SRV for the index buffer
 	// 1 SRV for the vertex buffer
-	// 1 SRV for the texture
+	// 1 SRV for the texture : Removed for now
 
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
 	heapDesc.NumDescriptors = 7;
@@ -1262,7 +1317,7 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 	dr.device->CreateShaderResourceView(ar.vertexBuffer, &vertexSRVDesc, handle);
 
 	// Create the material texture SRV
-	D3D12_SHADER_RESOURCE_VIEW_DESC textureSRVDesc = {};
+	/*D3D12_SHADER_RESOURCE_VIEW_DESC textureSRVDesc = {};
 	textureSRVDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	textureSRVDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	textureSRVDesc.Texture2D.MipLevels = 1;
@@ -1270,7 +1325,7 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 	textureSRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 	handle.ptr += handleIncrement;
-	dr.device->CreateShaderResourceView(ar.texture, &textureSRVDesc, handle);
+	dr.device->CreateShaderResourceView(ar.texture, &textureSRVDesc, handle);*/
 }
 
 static void CreateRayGenProgram(DeviceResources& dr, RayTracingResources& rt, Application& app)
@@ -1680,6 +1735,11 @@ void Application::InitializeSceneParams()
         
         UpdateCameraMatrices();
     }
+
+	for (auto& sceneCB : ar.sceneParams)
+    {
+        sceneCB = ar.sceneParams[frameIndex];
+    }
 }
 
 void Application::UpdateCameraMatrices()
@@ -1739,8 +1799,9 @@ void Application::Init(UINT width, UINT height, BOOL vsync, std::string meshFile
     gAppState.height = height;
     gAppState.vsync = vsync;
 
-    Mesh::LoadModel(meshFilePath, mesh);
-    InitShaderCompiler();
+	mesh.LoadCube();
+	InitializeSceneParams();
+	InitShaderCompiler();
 
 	//Initialise device resources
 	CreateDevice(dr);
@@ -1756,7 +1817,7 @@ void Application::Init(UINT width, UINT height, BOOL vsync, std::string meshFile
 	CreateRTVBackbuffers(dr, ar);
 	CreateVertexBuffer(dr, ar, *this);
 	CreateIndexBuffer(dr, ar, *this);
-	CreateTexture(dr, ar, *this);
+	//CreateTexture(dr, ar, *this);
 	CreateSceneParamsConstBuffer(dr, ar);
 	CreateCubeParamsConstBuffer(dr, ar, *this);
 

@@ -8,6 +8,11 @@ void RayGen()
 	uint2 LaunchIndex = DispatchRaysIndex().xy;
 	uint2 LaunchDimensions = DispatchRaysDimensions().xy;
 
+	float3 rayDir;
+    float3 origin;
+    
+    GenerateCameraRay(LaunchIndex, origin, rayDir);
+
 	float2 d = (((LaunchIndex.xy + 0.5f) / resolution.xy) * 2.f - 1.f);
 	float aspectRatio = (resolution.x / resolution.y);
 
