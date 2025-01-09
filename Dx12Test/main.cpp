@@ -938,7 +938,7 @@ static void CreateIndexBuffer(DeviceResources& dr, AppResources& ar, Application
     //Init vertex buffer view 
     ar.indexBufferView.BufferLocation = ar.indexBuffer->GetGPUVirtualAddress();
 	ar.indexBufferView.SizeInBytes = static_cast<UINT>(buffSize);
-	ar.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
+	ar.indexBufferView.Format = DXGI_FORMAT_R16_UINT;
 }
 
 void UploadTexture(DeviceResources& dr, ID3D12Resource* destResource, ID3D12Resource* srcResource, const TextureInfo &texture)
@@ -1301,7 +1301,7 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 	indexSRVDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
 	indexSRVDesc.Buffer.StructureByteStride = 0;
 	indexSRVDesc.Buffer.FirstElement = 0;
-	indexSRVDesc.Buffer.NumElements = (static_cast<UINT>(app.mesh.indices.size()) * sizeof(UINT)) / sizeof(float);
+	indexSRVDesc.Buffer.NumElements = (static_cast<UINT>(app.mesh.indices.size()) * sizeof(UINT16)) / sizeof(float);
 	indexSRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 	handle.ptr += handleIncrement;
@@ -1310,11 +1310,11 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 	// Create the vertex buffer SRV
 	D3D12_SHADER_RESOURCE_VIEW_DESC vertexSRVDesc;
 	vertexSRVDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-	vertexSRVDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-	vertexSRVDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
-	vertexSRVDesc.Buffer.StructureByteStride = 0;
+	vertexSRVDesc.Format = DXGI_FORMAT_UNKNOWN;
+	vertexSRVDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+	vertexSRVDesc.Buffer.StructureByteStride = sizeof(app.mesh.vertices[0]);
 	vertexSRVDesc.Buffer.FirstElement = 0;
-	vertexSRVDesc.Buffer.NumElements = (static_cast<UINT>(app.mesh.vertices.size()) * sizeof(Vertex)) / sizeof(float);
+	vertexSRVDesc.Buffer.NumElements = app.mesh.vertices.size();
 	vertexSRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 	handle.ptr += handleIncrement;

@@ -112,3 +112,8 @@ float4 CalculateDiffuseLighting(float3 hitPosition, float3 normal)
 
     return g_cubeCB.albedo * g_sceneCB.lightDiffuseColor * fNDotL;
 }
+
+float3 HitWorldPosition()
+{
+    return WorldRayOrigin() + RayTCurrent() * WorldRayDirection();
+}

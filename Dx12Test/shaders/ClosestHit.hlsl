@@ -22,10 +22,10 @@ void ClosestHit(inout HitInfo payload, in BuiltInTriangleIntersectionAttributes 
         Vertices[indices[2]].normal 
     };
 
-	float3 triangleNormal = HitAttribute(vertexNormals, attr);
+	float3 triangleNormal = HitAttribute(vertexNormals, attrib);
 
     float4 diffuseColor = CalculateDiffuseLighting(hitPosition, triangleNormal);
     float4 color = g_sceneCB.lightAmbientColor + diffuseColor;
 
-    payload.ShadedColorAndHitT = float4(color, RayTCurrent());
+    payload.ShadedColorAndHitT = float4(color.rgb, RayTCurrent());
 }
