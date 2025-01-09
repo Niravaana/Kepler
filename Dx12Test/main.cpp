@@ -321,8 +321,8 @@ namespace std
 			hash_combine(seed, hasher(vertex.position.y));
 			hash_combine(seed, hasher(vertex.position.z));
 
-			hash_combine(seed, hasher(vertex.uv.x));
-			hash_combine(seed, hasher(vertex.uv.y));
+			//hash_combine(seed, hasher(vertex.uv.x));
+			//hash_combine(seed, hasher(vertex.uv.y));
 
 			return seed;
 		}
@@ -332,7 +332,7 @@ namespace std
 struct Mesh
 {
 	std::vector<Vertex> vertices;
-	std::vector<UINT> indices;
+	std::vector<UINT16> indices;
     Material material;
 
 	void LoadCube()
@@ -428,11 +428,11 @@ struct Mesh
 					attrib.vertices[3 * index.vertex_index + 0]
 				};
 
-				vertex.uv =
+				/*vertex.uv =
 				{
 					attrib.texcoords[2 * index.texcoord_index + 0],
 					1 - attrib.texcoords[2 * index.texcoord_index + 1]
-				};
+				};*/
 
 				// Fast find unique vertices using a hash
 				if (uniqueVertices.count(vertex) == 0)
@@ -864,6 +864,10 @@ static void CreateBuffer(
 	heapDesc.Type = heapType;
 	heapDesc.CreationNodeMask = 1;
 	heapDesc.VisibleNodeMask = 1;
+	heapDesc.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heapDesc.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    heapDesc.CreationNodeMask = 1;
+    heapDesc.VisibleNodeMask = 1;
 
 	D3D12_RESOURCE_DESC resourceDesc = {};
 	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -911,7 +915,7 @@ static void CreateVertexBuffer(DeviceResources& dr, AppResources& ar, Applicatio
 
 static void CreateIndexBuffer(DeviceResources& dr, AppResources& ar, Application& app)
 {
-    UINT64 buffSize = (UINT)app.mesh.indices.size() * sizeof(UINT);
+    UINT64 buffSize = (UINT)app.mesh.indices.size() * sizeof(UINT16);
     const D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_UPLOAD;
     const D3D12_RESOURCE_STATES resourceState = D3D12_RESOURCE_STATE_GENERIC_READ;
     const D3D12_RESOURCE_FLAGS resourceFlags = D3D12_RESOURCE_FLAG_NONE;
@@ -1480,6 +1484,7 @@ static void CreateRTPipelineStateObject(DeviceResources& dr, RayTracingResources
 		D3D12_HIT_GROUP_DESC hitGroupDesc = {};
 		hitGroupDesc.ClosestHitShaderImport = L"ClosestHit_76";
 		hitGroupDesc.HitGroupExport = L"HitGroup";
+		hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
 
 		D3D12_STATE_SUBOBJECT hitGroup = {};
 		hitGroup.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
@@ -1493,7 +1498,7 @@ static void CreateRTPipelineStateObject(DeviceResources& dr, RayTracingResources
 		
 		D3D12_RAYTRACING_SHADER_CONFIG shaderDesc = {};
 		shaderDesc.MaxPayloadSizeInBytes = sizeof(XMFLOAT4);	// RGB + HitT
-		shaderDesc.MaxAttributeSizeInBytes = D3D12_RAYTRACING_MAX_ATTRIBUTE_SIZE_IN_BYTES;
+		shaderDesc.MaxAttributeSizeInBytes = sizeof(XMFLOAT2); //bary
 
 		D3D12_STATE_SUBOBJECT shaderConfigObject = {};
 		shaderConfigObject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;

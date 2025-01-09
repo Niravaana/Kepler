@@ -3,14 +3,29 @@
 // ---[ Closest Hit Shader ]---
 
 [shader("closesthit")]
-void ClosestHit(inout HitInfo payload, Attributes attrib)
+void ClosestHit(inout HitInfo payload, in BuiltInTriangleIntersectionAttributes attrib)
 {
-	uint triangleIndex = PrimitiveIndex();
-	float3 barycentrics = float3((1.0f - attrib.uv.x - attrib.uv.y), attrib.uv.x, attrib.uv.y);
-	VertexAttributes vertex = GetVertexAttributes(triangleIndex, barycentrics);
+	float3 hitPosition = HitWorldPosition();
+	
+	//triangles first index using prim Idx as 16 bit indices used
+	uint indexSizeInBytes = 2;
+    uint indicesPerTriangle = 3;
+    uint triangleIndexStride = indicesPerTriangle * indexSizeInBytes;
+    uint baseIndex = PrimitiveIndex() * triangleIndexStride;
 
-	int2 coord = floor(vertex.uv * textureResolution.x);
-	float3 color = albedo.Load(int3(coord, 0)).rgb;
+	//Load indices
+	const uint3 indices = Load3x16BitIndices(baseIndex);
 
-	payload.ShadedColorAndHitT = float4(color, RayTCurrent());
+	 float3 vertexNormals[3] = { 
+        Vertices[indices[0]].normal, 
+        Vertices[indices[1]].normal, 
+        Vertices[indices[2]].normal 
+    };
+
+	float3 triangleNormal = HitAttribute(vertexNormals, attr);
+
+    float4 diffuseColor = CalculateDiffuseLighting(hitPosition, triangleNormal);
+    float4 color = g_sceneCB.lightAmbientColor + diffuseColor;
+
+    payload.ShadedColorAndHitT = float4(color, RayTCurrent());
 }

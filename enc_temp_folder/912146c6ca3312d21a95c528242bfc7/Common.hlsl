@@ -29,12 +29,6 @@ struct CubeConstantBuffer
     XMFLOAT4 albedo;
 };
 
-struct Vertex
-{
-    XMFLOAT3 position;
-    XMFLOAT3 normal;
-};
-
 // ---[ Constant Buffers ]---
 ConstantBuffer<SceneConstantBuffer> g_sceneCB : register(b0);
 ConstantBuffer<CubeConstantBuffer> g_cubeCB : register(b1);

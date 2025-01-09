@@ -12,16 +12,13 @@ void RayGen()
     float3 origin;
     
     GenerateCameraRay(LaunchIndex, origin, rayDir);
-
-	float2 d = (((LaunchIndex.xy + 0.5f) / resolution.xy) * 2.f - 1.f);
-	float aspectRatio = (resolution.x / resolution.y);
-
+	
 	// Setup the ray
 	RayDesc ray;
-	ray.Origin = viewOriginAndTanHalfFovY.xyz;
-	ray.Direction = normalize((d.x * view[0].xyz * viewOriginAndTanHalfFovY.w * aspectRatio) - (d.y * view[1].xyz * viewOriginAndTanHalfFovY.w) + view[2].xyz);
-	ray.TMin = 0.1f;
-	ray.TMax = 1000.f;	
+	ray.Origin = origin;
+	ray.Direction = rayDir;
+	ray.TMin = 0.001f;
+	ray.TMax = 10000.f;	
 
 	// Trace the ray
 	HitInfo payload;
@@ -29,10 +26,10 @@ void RayGen()
 
 	TraceRay(
 		SceneBVH,
-		RAY_FLAG_NONE,
-		0xFF,
+		RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
+		~0,
 		0,
-		0,
+		1,
 		0,
 		ray,
 		payload);
