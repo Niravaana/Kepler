@@ -1,3 +1,10 @@
+
+typedef float3 XMFLOAT3;
+typedef float4 XMFLOAT4;
+typedef float4 XMVECTOR;
+typedef float4x4 XMMATRIX;
+typedef uint UINT;
+
 //ToDo put this in common head between app and shader
 struct HitInfo
 {
@@ -8,12 +15,6 @@ struct Attributes
 {
 	float2 uv;
 };
-
-typedef float3 XMFLOAT3;
-typedef float4 XMFLOAT4;
-typedef float4 XMVECTOR;
-typedef float4x4 XMMATRIX;
-typedef uint UINT;
 
 struct SceneConstantBuffer
 {
