@@ -283,7 +283,6 @@ namespace Utility
 }
 
 
-
 struct Vertex
 {
 	DirectX::XMFLOAT3 position;
@@ -338,7 +337,7 @@ namespace std
 struct Mesh
 {
 	std::vector<Vertex> vertices;
-	std::vector<UINT16> indices;
+	std::vector<UINT> indices;
     Material material;
 
 	void LoadCube()
@@ -642,6 +641,36 @@ struct Application
 	RayTracingResources rt;
 };
 
+
+static std::wstring GetLatestWinPixGpuCapturerPath()
+{
+    LPWSTR programFilesPath = nullptr;
+    SHGetKnownFolderPath(FOLDERID_ProgramFiles, KF_FLAG_DEFAULT, NULL, &programFilesPath);
+
+    std::filesystem::path pixInstallationPath = programFilesPath;
+    pixInstallationPath /= "Microsoft PIX";
+
+    std::wstring newestVersionFound;
+
+    for (auto const& directory_entry : std::filesystem::directory_iterator(pixInstallationPath))
+    {
+        if (directory_entry.is_directory())
+        {
+            if (newestVersionFound.empty() || newestVersionFound < directory_entry.path().filename().c_str())
+            {
+                newestVersionFound = directory_entry.path().filename().c_str();
+            }
+        }
+    }
+
+    if (newestVersionFound.empty())
+    {
+        // TODO: Error, no PIX installation found
+    }
+
+    return pixInstallationPath / newestVersionFound / L"WinPixGpuCapturer.dll";
+}
+
 static void WaitForGPU(DeviceResources& dr) 
 {
 	ThrowIfFailed(dr.cmdQueue->Signal(dr.fence, dr.fenceValues[dr.frameIndex]), L"Failed to signal the fence");
@@ -693,10 +722,17 @@ static void CreateDevice(DeviceResources& dr)
         {
             debugController->EnableDebugLayer();
         }
+
+		if (GetModuleHandle(L"WinPixGpuCapturer.dll") == 0)
+        {
+            LoadLibrary(GetLatestWinPixGpuCapturerPath().c_str());
+        }
     }
 #endif
 
-    ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&dr.factory)));
+	ThrowIfFailed(CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG, IID_PPV_ARGS(&dr.factory)));
+
+    //ThrowIfFailed(CreateDXGIFactory1(IID_PPV_ARGS(&dr.factory)));
 
     // Create the device
 	for (UINT adapterIndex = 0; DXGI_ERROR_NOT_FOUND != dr.factory->EnumAdapters1(adapterIndex, &dr.adapter); ++adapterIndex)
@@ -873,8 +909,6 @@ static void CreateBuffer(
 	heapDesc.VisibleNodeMask = 1;
 	heapDesc.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
     heapDesc.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-    heapDesc.CreationNodeMask = 1;
-    heapDesc.VisibleNodeMask = 1;
 
 	D3D12_RESOURCE_DESC resourceDesc = {};
 	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -922,7 +956,7 @@ static void CreateVertexBuffer(DeviceResources& dr, AppResources& ar, Applicatio
 
 static void CreateIndexBuffer(DeviceResources& dr, AppResources& ar, Application& app)
 {
-    UINT64 buffSize = (UINT)app.mesh.indices.size() * sizeof(UINT16);
+    UINT64 buffSize = (UINT)app.mesh.indices.size() * sizeof(UINT);
     const D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_UPLOAD;
     const D3D12_RESOURCE_STATES resourceState = D3D12_RESOURCE_STATE_GENERIC_READ;
     const D3D12_RESOURCE_FLAGS resourceFlags = D3D12_RESOURCE_FLAG_NONE;
@@ -945,7 +979,7 @@ static void CreateIndexBuffer(DeviceResources& dr, AppResources& ar, Application
     //Init vertex buffer view 
     ar.indexBufferView.BufferLocation = ar.indexBuffer->GetGPUVirtualAddress();
 	ar.indexBufferView.SizeInBytes = static_cast<UINT>(buffSize);
-	ar.indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+	ar.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 }
 
 void UploadTexture(DeviceResources& dr, ID3D12Resource* destResource, ID3D12Resource* srcResource, const TextureInfo &texture)
@@ -1048,7 +1082,7 @@ static void CreateSceneParamsConstBuffer(DeviceResources& dr, AppResources& ar)
 #endif
 
 	ThrowIfFailed(ar.sceneParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.sceneParamsMappedPtr)), L"Failed to map scene params buffer");
-	memcpy(ar.sceneParamsMappedPtr, &ar.sceneParams, sizeof(ar.sceneParams));
+	//memcpy(ar.sceneParamsMappedPtr, &ar.sceneParams, sizeof(ar.sceneParams));
 }
 
 static void CreateCubeParamsConstBuffer(DeviceResources& dr, AppResources& ar, Application& app)
@@ -1093,15 +1127,16 @@ static void CreateBlas(DeviceResources& dr, AppResources& ar, Application& app, 
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO ASPreBuildInfo = {};
 	dr.device->GetRaytracingAccelerationStructurePrebuildInfo(&ASInputs, &ASPreBuildInfo);
 
-	ASPreBuildInfo.ScratchDataSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ScratchDataSizeInBytes);
-	ASPreBuildInfo.ResultDataMaxSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ResultDataMaxSizeInBytes);
+	//ASPreBuildInfo.ScratchDataSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ScratchDataSizeInBytes);
+	//ASPreBuildInfo.ResultDataMaxSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ResultDataMaxSizeInBytes);
 
 	// Create the BLAS scratch buffer
+	// ToDo create only one scratch buffer doing prebuild blas/tlas at same time and allocating max size
 	UINT64 buffSize = ASPreBuildInfo.ScratchDataSizeInBytes;
     D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_STATES resourceState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     D3D12_RESOURCE_FLAGS resourceFlags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    UINT64 buffAlignment = max(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
+	UINT64 buffAlignment = 0;// max(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
 
 	CreateBuffer(dr, buffSize, heapType, resourceState, resourceFlags, buffAlignment, &rt.BLAS.pScratch);
 #if NAME_D3D_RESOURCES
@@ -1137,10 +1172,10 @@ static void CreateTlas(DeviceResources& dr, AppResources& ar, Application& app, 
 	D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {};
 	instanceDesc.InstanceID = 0;
 	instanceDesc.InstanceContributionToHitGroupIndex = 0;
-	instanceDesc.InstanceMask = 0xFF;
+	instanceDesc.InstanceMask = 1;
 	instanceDesc.Transform[0][0] = instanceDesc.Transform[1][1] = instanceDesc.Transform[2][2] = 1;
 	instanceDesc.AccelerationStructure = rt.BLAS.pResult->GetGPUVirtualAddress();
-	instanceDesc.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_FRONT_COUNTERCLOCKWISE;
+	instanceDesc.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
 
 	UINT64 buffSize = sizeof(instanceDesc);
     D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_UPLOAD;
@@ -1171,8 +1206,8 @@ static void CreateTlas(DeviceResources& dr, AppResources& ar, Application& app, 
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO ASPreBuildInfo = {};
 	dr.device->GetRaytracingAccelerationStructurePrebuildInfo(&ASInputs, &ASPreBuildInfo);
 
-	ASPreBuildInfo.ResultDataMaxSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ResultDataMaxSizeInBytes);
-	ASPreBuildInfo.ScratchDataSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ScratchDataSizeInBytes);
+	//ASPreBuildInfo.ResultDataMaxSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ResultDataMaxSizeInBytes);
+	//ASPreBuildInfo.ScratchDataSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ScratchDataSizeInBytes);
 
 	// Set TLAS size
 	rt.tlasSize = ASPreBuildInfo.ResultDataMaxSizeInBytes;
@@ -1249,17 +1284,14 @@ static void CreateRootSignature(DeviceResources& dr, D3D12_ROOT_SIGNATURE_DESC& 
 static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTracingResources& rt, Application& app)
 {
 	// Describe the CBV/SRV/UAV heap
-	// Need 7 entries:
-	// 1 CBV for the sceneParamsCB - described in global root sig
-	// 1 CBV for the cubeParamsCB - described in global root sig
+	// Need 4 entries:
 	// 1 UAV for the RT output
 	// 1 SRV for the Scene BVH
 	// 1 SRV for the index buffer
 	// 1 SRV for the vertex buffer
-	// 1 SRV for the texture : Removed for now
 
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-	heapDesc.NumDescriptors = 7;
+	heapDesc.NumDescriptors = 4;
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -1271,25 +1303,9 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 	ar.descriptorHeap->SetName(L"DXR Descriptor Heap");
 #endif
 
-	// Create the Scene parameters CBV
-	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.sceneParams));
-	cbvDesc.BufferLocation = ar.sceneParamsCB->GetGPUVirtualAddress();
-
-	dr.device->CreateConstantBufferView(&cbvDesc, handle);
-
-	// Create the MaterialParams CBV
-	cbvDesc.SizeInBytes = ALIGN(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, sizeof(ar.cubeParams));
-	cbvDesc.BufferLocation = ar.cubeParamsCB->GetGPUVirtualAddress();
-
-	handle.ptr += handleIncrement;
-	dr.device->CreateConstantBufferView(&cbvDesc, handle);
-
 	// Create the DXR output buffer UAV
 	D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 	uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-
-	handle.ptr += handleIncrement;
 	dr.device->CreateUnorderedAccessView(dr.DXROutput, nullptr, &uavDesc, handle);
 
 	// Create the DXR Top Level Acceleration Structure SRV
@@ -1308,7 +1324,7 @@ static void CreateRTDescriptorHeap(DeviceResources& dr, AppResources& ar, RayTra
 	indexSRVDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
 	indexSRVDesc.Buffer.StructureByteStride = 0;
 	indexSRVDesc.Buffer.FirstElement = 0;
-	indexSRVDesc.Buffer.NumElements = (static_cast<UINT>(app.mesh.indices.size()) * sizeof(UINT16)) / sizeof(float);
+	indexSRVDesc.Buffer.NumElements = (static_cast<UINT>(app.mesh.indices.size()) * sizeof(UINT)) / sizeof(float);
 	indexSRVDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 	handle.ptr += handleIncrement;
@@ -1353,7 +1369,6 @@ static void CreateRayGenProgram(DeviceResources& dr, RayTracingResources& rt, Ap
 		 1 SRV for the Scene BVH
 		 1 SRV for the index buffer
 		 1 SRV for the vertex buffer
-		 1 SRV for the texture
 	*/
 
 	D3D12_DESCRIPTOR_RANGE ranges[2];
@@ -1362,13 +1377,13 @@ static void CreateRayGenProgram(DeviceResources& dr, RayTracingResources& rt, Ap
 	ranges[0].NumDescriptors = 1;
 	ranges[0].RegisterSpace = 0;
 	ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-	ranges[0].OffsetInDescriptorsFromTableStart = 2;
+	ranges[0].OffsetInDescriptorsFromTableStart = 0;
 
 	ranges[1].BaseShaderRegister = 0;
-	ranges[1].NumDescriptors = 4;
+	ranges[1].NumDescriptors = 3;
 	ranges[1].RegisterSpace = 0;
 	ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-	ranges[1].OffsetInDescriptorsFromTableStart = 3;
+	ranges[1].OffsetInDescriptorsFromTableStart = 1;
 
 	D3D12_ROOT_PARAMETER param0 = {};
 	param0.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1405,6 +1420,7 @@ static void CreateClosestHitProgram(DeviceResources& dr, RayTracingResources& rt
 
 static void CreateGlobalRootSignature(DeviceResources& dr, AppResources& ar)
 {
+
 	D3D12_ROOT_PARAMETER param0 = {};
 	param0.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	param0.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -1415,7 +1431,7 @@ static void CreateGlobalRootSignature(DeviceResources& dr, AppResources& ar)
 	param1.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	param1.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	param1.Descriptor.RegisterSpace = 0;
-	param1.Descriptor.ShaderRegister = 0;
+	param1.Descriptor.ShaderRegister = 1;
 
 	D3D12_ROOT_PARAMETER rootParams[2] = { param0, param1 };
 
@@ -1692,17 +1708,20 @@ static void BuildCommandList(DeviceResources& dr, AppResources& ar, RayTracingRe
 	// Wait for the transitions to complete
 	dr.cmdList[0]->ResourceBarrier(2, OutputBarriers);
 
-	//Set global root signature 
-	dr.cmdList[0]->SetComputeRootSignature(ar.globalRootSignature);
-	
 	// Set the UAV/SRV/CBV and sampler heaps
 	ID3D12DescriptorHeap* ppHeaps[] = { ar.descriptorHeap };
 	dr.cmdList[0]->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+	//Set global root signature 
+	dr.cmdList[0]->SetComputeRootSignature(ar.globalRootSignature);
 
 	constexpr UINT sceneConstBufferSlot = 0;
-	memcpy(&ar.sceneParamsMappedPtr[dr.frameIndex].constants, &ar.sceneParams[dr.frameIndex], sizeof(ar.sceneParams[dr.frameIndex]));
+	constexpr UINT cubeConstBufferSlot = 1;
+	memcpy(&ar.sceneParamsMappedPtr[0].constants, &ar.sceneParams[dr.frameIndex], sizeof(ar.sceneParams[dr.frameIndex]));
+	const auto tt = sizeof(ar.sceneParamsMappedPtr[0]);
     auto cbGpuAddress = ar.sceneParamsCB->GetGPUVirtualAddress() + dr.frameIndex * sizeof(ar.sceneParamsMappedPtr[0]);
 	dr.cmdList[0]->SetComputeRootConstantBufferView(sceneConstBufferSlot, cbGpuAddress);
+	dr.cmdList[0]->SetComputeRootConstantBufferView(cubeConstBufferSlot, ar.cubeParamsCB->GetGPUVirtualAddress());
+
 
 	// Dispatch rays
 	D3D12_DISPATCH_RAYS_DESC desc = {};
@@ -1774,6 +1793,23 @@ void Application::InitializeSceneParams()
         ar.up = XMVector3Transform(ar.up, rotate);
         
         UpdateCameraMatrices();
+    }
+
+	// Setup lights.
+    {
+        // Initialize the lighting parameters.
+        XMFLOAT4 lightPosition;
+        XMFLOAT4 lightAmbientColor;
+        XMFLOAT4 lightDiffuseColor;
+
+        lightPosition = XMFLOAT4(0.0f, 1.8f, -3.0f, 0.0f);
+        ar.sceneParams[frameIndex].lightPosition = XMLoadFloat4(&lightPosition);
+
+        lightAmbientColor = XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f);
+        ar.sceneParams[frameIndex].lightAmbientColor = XMLoadFloat4(&lightAmbientColor);
+
+        lightDiffuseColor = XMFLOAT4(0.5f, 0.0f, 0.0f, 1.0f);
+        ar.sceneParams[frameIndex].lightDiffuseColor = XMLoadFloat4(&lightDiffuseColor);
     }
 
 	for (auto& sceneCB : ar.sceneParams)

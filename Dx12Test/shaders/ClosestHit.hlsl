@@ -8,13 +8,13 @@ void ClosestHit(inout HitInfo payload, in BuiltInTriangleIntersectionAttributes 
 	float3 hitPosition = HitWorldPosition();
 	
 	//triangles first index using prim Idx as 16 bit indices used
-	uint indexSizeInBytes = 2;
+	uint indexSizeInBytes = 4;
     uint indicesPerTriangle = 3;
     uint triangleIndexStride = indicesPerTriangle * indexSizeInBytes;
     uint baseIndex = PrimitiveIndex() * triangleIndexStride;
 
 	//Load indices
-	const uint3 indices = Load3x16BitIndices(baseIndex);
+	const uint3 indices = Indices.Load3(baseIndex); 
 
 	 float3 vertexNormals[3] = { 
         Vertices[indices[0]].normal, 
@@ -26,6 +26,5 @@ void ClosestHit(inout HitInfo payload, in BuiltInTriangleIntersectionAttributes 
 
     float4 diffuseColor = CalculateDiffuseLighting(hitPosition, triangleNormal);
     float4 color = g_sceneCB.lightAmbientColor + diffuseColor;
-
-    payload.ShadedColorAndHitT = float4(color.rgb, RayTCurrent());
+    payload.ShadedColorAndHitT = color; //float4(color.rgb, RayTCurrent());
 }

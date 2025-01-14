@@ -34,5 +34,5 @@ void RayGen()
 		ray,
 		payload);
 
-	RTOutput[LaunchIndex.xy] = float4(payload.ShadedColorAndHitT.rgb, 1.f);
+	RTOutput[LaunchIndex.xy] = payload.ShadedColorAndHitT; //float4(payload.ShadedColorAndHitT.rgb, 1.f);
 }
