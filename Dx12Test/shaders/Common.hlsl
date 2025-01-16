@@ -94,10 +94,10 @@ inline void GenerateCameraRay(uint2 index, out float3 origin, out float3 directi
 {3.50725055, -1.98400080, 3.50725007, -0.992000341}, 
 {-2.87900329, 1.62861001, -2.87900233, 1.00000036} 
 };
-    float4 world = mul(float4(screenPos, 0, 1), projToWorld);
+    float4 world = mul(float4(screenPos, 0, 1), g_sceneCB.projectionToWorld);
 
     world.xyz /= world.w;
-    origin = float3(-3.5355f, 2.0f, -3.5355f); // g_sceneCB.cameraPosition.xyz;
+    origin = g_sceneCB.cameraPosition.xyz;
     direction = normalize(world.xyz - origin);
 }
 

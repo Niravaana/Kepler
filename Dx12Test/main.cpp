@@ -599,7 +599,7 @@ struct AppResources
 	//scene light pos mat buffers
 	SceneConstantBuffer sceneParams[gFrameCount];
 	ID3D12Resource* sceneParamsCB = nullptr;
-	AlignedSceneConstantBuffer* sceneParamsMappedPtr = nullptr;
+	SceneConstantBuffer* sceneParamsMappedPtr = nullptr;
 
     CubeConstantBuffer cubeParams;
 	ID3D12Resource* cubeParamsCB = nullptr;
@@ -1716,7 +1716,7 @@ static void BuildCommandList(DeviceResources& dr, AppResources& ar, RayTracingRe
 
 	constexpr UINT sceneConstBufferSlot = 0;
 	constexpr UINT cubeConstBufferSlot = 1;
-	memcpy(&ar.sceneParamsMappedPtr[0].constants, &ar.sceneParams[dr.frameIndex], sizeof(ar.sceneParams[dr.frameIndex]));
+	memcpy(&ar.sceneParamsMappedPtr[dr.frameIndex], &ar.sceneParams[dr.frameIndex], sizeof(ar.sceneParams[dr.frameIndex]));
 	const auto tt = sizeof(ar.sceneParamsMappedPtr[0]);
     auto cbGpuAddress = ar.sceneParamsCB->GetGPUVirtualAddress() + dr.frameIndex * sizeof(ar.sceneParamsMappedPtr[0]);
 	dr.cmdList[0]->SetComputeRootConstantBufferView(sceneConstBufferSlot, cbGpuAddress);
