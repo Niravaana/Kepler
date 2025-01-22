@@ -599,7 +599,7 @@ struct AppResources
 	//scene light pos mat buffers
 	SceneConstantBuffer sceneParams[gFrameCount];
 	ID3D12Resource* sceneParamsCB = nullptr;
-	SceneConstantBuffer* sceneParamsMappedPtr = nullptr;
+	AlignedSceneConstantBuffer* sceneParamsMappedPtr = nullptr;
 
     CubeConstantBuffer cubeParams;
 	ID3D12Resource* cubeParamsCB = nullptr;
@@ -1082,7 +1082,6 @@ static void CreateSceneParamsConstBuffer(DeviceResources& dr, AppResources& ar)
 #endif
 
 	ThrowIfFailed(ar.sceneParamsCB->Map(0, nullptr, reinterpret_cast<void**>(&ar.sceneParamsMappedPtr)), L"Failed to map scene params buffer");
-	//memcpy(ar.sceneParamsMappedPtr, &ar.sceneParams, sizeof(ar.sceneParams));
 }
 
 static void CreateCubeParamsConstBuffer(DeviceResources& dr, AppResources& ar, Application& app)
@@ -1273,8 +1272,9 @@ static void CreateRootSignature(DeviceResources& dr, D3D12_ROOT_SIGNATURE_DESC& 
 {
 	ID3DBlob* serializedSig;
 	ID3DBlob* error;
+	UINT nodeMask = 0; //Set this to 0 for single gpu operatio
 	ThrowIfFailed(D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serializedSig, &error), L"Failed to serialize root signature");
-	ThrowIfFailed(dr.device->CreateRootSignature(0, serializedSig->GetBufferPointer(), serializedSig->GetBufferSize(), IID_PPV_ARGS(outRootSig)), L"Failed to create root signature");
+	ThrowIfFailed(dr.device->CreateRootSignature(nodeMask, serializedSig->GetBufferPointer(), serializedSig->GetBufferSize(), IID_PPV_ARGS(outRootSig)), L"Failed to create root signature");
 
 	SAFE_RELEASE(serializedSig);
 	SAFE_RELEASE(error);
@@ -1424,13 +1424,13 @@ static void CreateGlobalRootSignature(DeviceResources& dr, AppResources& ar)
 	D3D12_ROOT_PARAMETER param0 = {};
 	param0.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	param0.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-	param0.Descriptor.RegisterSpace = 0;
+	param0.Descriptor.RegisterSpace = 1;
 	param0.Descriptor.ShaderRegister = 0;
 
 	D3D12_ROOT_PARAMETER param1 = {};
 	param1.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	param1.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-	param1.Descriptor.RegisterSpace = 0;
+	param1.Descriptor.RegisterSpace = 1;
 	param1.Descriptor.ShaderRegister = 1;
 
 	D3D12_ROOT_PARAMETER rootParams[2] = { param0, param1 };
@@ -1708,21 +1708,21 @@ static void BuildCommandList(DeviceResources& dr, AppResources& ar, RayTracingRe
 	// Wait for the transitions to complete
 	dr.cmdList[0]->ResourceBarrier(2, OutputBarriers);
 
-	// Set the UAV/SRV/CBV and sampler heaps
-	ID3D12DescriptorHeap* ppHeaps[] = { ar.descriptorHeap };
-	dr.cmdList[0]->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
 	//Set global root signature 
 	dr.cmdList[0]->SetComputeRootSignature(ar.globalRootSignature);
 
 	constexpr UINT sceneConstBufferSlot = 0;
 	constexpr UINT cubeConstBufferSlot = 1;
-	memcpy(&ar.sceneParamsMappedPtr[dr.frameIndex], &ar.sceneParams[dr.frameIndex], sizeof(ar.sceneParams[dr.frameIndex]));
-	const auto tt = sizeof(ar.sceneParamsMappedPtr[0]);
+	memcpy(&ar.sceneParamsMappedPtr[dr.frameIndex].constants, &ar.sceneParams[dr.frameIndex], sizeof(ar.sceneParams[dr.frameIndex]));
     auto cbGpuAddress = ar.sceneParamsCB->GetGPUVirtualAddress() + dr.frameIndex * sizeof(ar.sceneParamsMappedPtr[0]);
+	
 	dr.cmdList[0]->SetComputeRootConstantBufferView(sceneConstBufferSlot, cbGpuAddress);
 	dr.cmdList[0]->SetComputeRootConstantBufferView(cubeConstBufferSlot, ar.cubeParamsCB->GetGPUVirtualAddress());
 
-
+	// Set the UAV/SRV/CBV and sampler heaps
+	ID3D12DescriptorHeap* ppHeaps[] = { ar.descriptorHeap };
+	dr.cmdList[0]->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+	
 	// Dispatch rays
 	D3D12_DISPATCH_RAYS_DESC desc = {};
 	desc.RayGenerationShaderRecord.StartAddress = rt.shaderTable->GetGPUVirtualAddress();
@@ -1808,7 +1808,7 @@ void Application::InitializeSceneParams()
         lightAmbientColor = XMFLOAT4(0.5f, 0.5f, 0.5f, 1.0f);
         ar.sceneParams[frameIndex].lightAmbientColor = XMLoadFloat4(&lightAmbientColor);
 
-        lightDiffuseColor = XMFLOAT4(0.5f, 0.0f, 0.0f, 1.0f);
+        lightDiffuseColor = XMFLOAT4(0.5f, 0.0f, 0.3f, 1.0f);
         ar.sceneParams[frameIndex].lightDiffuseColor = XMLoadFloat4(&lightDiffuseColor);
     }
 
@@ -1935,7 +1935,7 @@ void Application::Update()
 	auto prevFrameIndex = (dr.frameIndex == 0) ? (gFrameCount - 1) : (dr.frameIndex - 1);
 
     // Rotate the camera around Y axis.
-    {
+    /*{
         float secondsToRotateAround = 24.0f;
         float angleToRotateBy = 360.0f * (elapsedTime / secondsToRotateAround);
         XMMATRIX rotate = XMMatrixRotationY(XMConvertToRadians(angleToRotateBy));
@@ -1943,7 +1943,7 @@ void Application::Update()
         ar.up = XMVector3Transform(ar.up, rotate);
         ar.at = XMVector3Transform(ar.at, rotate);
         UpdateCameraMatrices();
-    }
+    }*/
 
     // Rotate the second light around Y axis.
     {

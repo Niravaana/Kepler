@@ -5,13 +5,10 @@
 [shader("raygeneration")]
 void RayGen()
 {
-	uint2 LaunchIndex = DispatchRaysIndex().xy;
-	uint2 LaunchDimensions = DispatchRaysDimensions().xy;
-
 	float3 rayDir;
     float3 origin;
     
-    GenerateCameraRay(LaunchIndex, origin, rayDir);
+    GenerateCameraRay(DispatchRaysIndex().xy, origin, rayDir);
 	
 	// Setup the ray
 	RayDesc ray;
@@ -34,5 +31,5 @@ void RayGen()
 		ray,
 		payload);
 
-	RTOutput[LaunchIndex.xy] = payload.ShadedColorAndHitT; //float4(payload.ShadedColorAndHitT.rgb, 1.f);
+	RTOutput[DispatchRaysIndex().xy] = payload.ShadedColorAndHitT; //float4(payload.ShadedColorAndHitT.rgb, 1.f);
 }

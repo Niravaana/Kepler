@@ -18,11 +18,11 @@ struct Attributes
 
 struct SceneConstantBuffer
 {
-    XMMATRIX projectionToWorld;
-    XMVECTOR cameraPosition;
-    XMVECTOR lightPosition;
-    XMVECTOR lightAmbientColor;
-    XMVECTOR lightDiffuseColor;
+    float4x4 projectionToWorld;
+    float4 cameraPosition;
+    float4 lightPosition;
+    float4 lightAmbientColor;
+    float4 lightDiffuseColor;
 };
 
 struct CubeConstantBuffer
@@ -36,16 +36,15 @@ struct Vertex
     XMFLOAT3 normal;
 };
 
-// ---[ Constant Buffers ]---
-ConstantBuffer<SceneConstantBuffer> g_sceneCB : register(b0);
-ConstantBuffer<CubeConstantBuffer> g_cubeCB : register(b1);
-
 // ---[ Resources ]---
 RWTexture2D<float4> RTOutput				: register(u0);
 RaytracingAccelerationStructure SceneBVH	: register(t0, space0);
 ByteAddressBuffer Indices					: register(t1, space0);
 StructuredBuffer<Vertex> Vertices			: register(t2, space0);
 
+// ---[ Constant Buffers ]---
+ConstantBuffer<SceneConstantBuffer> g_sceneCB : register(b0, space1);
+ConstantBuffer<CubeConstantBuffer> g_cubeCB : register(b1, space1);
 
 // ---[ Helper Functions ]---
 
@@ -94,7 +93,7 @@ inline void GenerateCameraRay(uint2 index, out float3 origin, out float3 directi
 {3.50725055, -1.98400080, 3.50725007, -0.992000341}, 
 {-2.87900329, 1.62861001, -2.87900233, 1.00000036} 
 };
-    float4 world = mul(float4(screenPos, 0, 1), g_sceneCB.projectionToWorld);
+    float4 world = mul(float4(screenPos, 0, 1),  g_sceneCB.projectionToWorld);
 
     world.xyz /= world.w;
     origin = g_sceneCB.cameraPosition.xyz;
@@ -114,7 +113,7 @@ float4 CalculateDiffuseLighting(float3 hitPosition, float3 normal)
 
     float fNDotL = max(0.0f, dot(pixelToLight, normal));
 
-    return g_cubeCB.albedo * g_sceneCB.lightDiffuseColor * fNDotL;
+    return float4(1.0f, 1.0f, 1.0f, 1.0f) * g_sceneCB.lightDiffuseColor * fNDotL;
 }
 
 float3 HitWorldPosition()
