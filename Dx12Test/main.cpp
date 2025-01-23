@@ -1938,7 +1938,7 @@ void Application::Update()
 	auto prevFrameIndex = (dr.frameIndex == 0) ? (gFrameCount - 1) : (dr.frameIndex - 1);
 
     // Rotate the camera around Y axis.
-    /*{
+    {
         float secondsToRotateAround = 24.0f;
         float angleToRotateBy = 360.0f * (elapsedTime / secondsToRotateAround);
         XMMATRIX rotate = XMMatrixRotationY(XMConvertToRadians(angleToRotateBy));
@@ -1946,7 +1946,7 @@ void Application::Update()
         ar.up = XMVector3Transform(ar.up, rotate);
         ar.at = XMVector3Transform(ar.at, rotate);
         UpdateCameraMatrices();
-    }*/
+    }
 
     // Rotate the second light around Y axis.
     {
