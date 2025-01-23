@@ -152,7 +152,7 @@ struct D3D12ShaderInfo
 	LPCWSTR		filename = nullptr;
 	LPCWSTR		entryPoint = nullptr;
 	LPCWSTR		targetProfile = nullptr;
-	LPCWSTR*	arguments = nullptr;
+	std::vector<PCWSTR>	arguments;
 	DxcDefine*	defines = nullptr;
 	UINT32		argCount = 0;
 	UINT32		defineCount = 0;
@@ -163,6 +163,9 @@ struct D3D12ShaderInfo
 		filename = inFilename;
 		entryPoint = inEntryPoint;
 		targetProfile = inProfile;
+#if _DEBUG
+		arguments.push_back(L"-Zi");
+#endif
 	}
 };
 
@@ -189,8 +192,8 @@ struct D3D12ShaderCompilerInfo
 			info.filename,
 			info.entryPoint,
 			info.targetProfile,
-			info.arguments,
-			info.argCount,
+			info.arguments.data(),
+			info.arguments.size(),
 			info.defines,
 			info.defineCount,
 			dxcIncludeHandler.Get(),
